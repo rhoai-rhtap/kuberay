@@ -1,22 +1,30 @@
 package model
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
+	util "github.com/ray-project/kuberay/apiserver/pkg/util"
 	api "github.com/ray-project/kuberay/proto/go_client"
-	"github.com/ray-project/kuberay/ray-operator/apis/ray/v1alpha1"
+	rayv1api "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
+	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 var (
-	enableIngress          = true
-	headNodeReplicas int32 = 1
-	workerReplicas   int32 = 5
+	enableIngress                    = true
+	deploymentReplicas       int32   = 1
+	headNodeReplicas         int32   = 1
+	workerReplicas           int32   = 5
+	unhealthySecondThreshold int32   = 900
+	floatNumber              float64 = 1
+	secondsValue             int32   = 100
 )
 
-var headSpecTest = v1alpha1.HeadGroupSpec{
+var headSpecTest = rayv1api.HeadGroupSpec{
 	ServiceType:   "ClusterIP",
 	EnableIngress: &enableIngress,
 	Replicas:      &headNodeReplicas,
@@ -69,20 +77,43 @@ var headSpecTest = v1alpha1.HeadGroupSpec{
 							Value: "123",
 						},
 						{
-							Name:  "AWS_SECRET",
-							Value: "1234",
+							Name: "REDIS_PASSWORD",
+							ValueFrom: &v1.EnvVarSource{
+								SecretKeyRef: &v1.SecretKeySelector{
+									LocalObjectReference: v1.LocalObjectReference{
+										Name: "redis-password-secret",
+									},
+									Key: "password",
+								},
+							},
 						},
 						{
-							Name:  "RAY_PORT",
-							Value: "6379",
+							Name: "CONFIGMAP",
+							ValueFrom: &v1.EnvVarSource{
+								ConfigMapKeyRef: &v1.ConfigMapKeySelector{
+									LocalObjectReference: v1.LocalObjectReference{
+										Name: "special-config",
+									},
+									Key: "special.how",
+								},
+							},
 						},
 						{
-							Name:  "RAY_ADDRESS",
-							Value: "127.0.0.1:6379",
+							Name: "ResourceFieldRef",
+							ValueFrom: &v1.EnvVarSource{
+								ResourceFieldRef: &v1.ResourceFieldSelector{
+									ContainerName: "my-container",
+									Resource:      "resource",
+								},
+							},
 						},
 						{
-							Name:  "RAY_USAGE_STATS_KUBERAY_IN_USE",
-							Value: "1",
+							Name: "FieldRef",
+							ValueFrom: &v1.EnvVarSource{
+								FieldRef: &v1.ObjectFieldSelector{
+									FieldPath: "path",
+								},
+							},
 						},
 					},
 				},
@@ -114,7 +145,7 @@ var configMapWithTolerations = v1.ConfigMap{
 	},
 }
 
-var workerSpecTest = v1alpha1.WorkerGroupSpec{
+var workerSpecTest = rayv1api.WorkerGroupSpec{
 	GroupName:   "",
 	Replicas:    &workerReplicas,
 	MinReplicas: &workerReplicas,
@@ -195,7 +226,7 @@ var workerSpecTest = v1alpha1.WorkerGroupSpec{
 	},
 }
 
-var ClusterSpecTest = v1alpha1.RayCluster{
+var ClusterSpecTest = rayv1api.RayCluster{
 	ObjectMeta: metav1.ObjectMeta{
 		Name:      "raycluster-sample",
 		Namespace: "default",
@@ -203,11 +234,142 @@ var ClusterSpecTest = v1alpha1.RayCluster{
 			"kubernetes.io/ingress.class": "nginx",
 		},
 	},
-	Spec: v1alpha1.RayClusterSpec{
+	Spec: rayv1api.RayClusterSpec{
 		HeadGroupSpec: headSpecTest,
-		WorkerGroupSpecs: []v1alpha1.WorkerGroupSpec{
+		WorkerGroupSpecs: []rayv1api.WorkerGroupSpec{
 			workerSpecTest,
 		},
+	},
+}
+
+var JobNewClusterTest = rayv1api.RayJob{
+	ObjectMeta: metav1.ObjectMeta{
+		Name:      "test",
+		Namespace: "test",
+		Labels: map[string]string{
+			"ray.io/user": "user",
+		},
+	},
+	Spec: rayv1api.RayJobSpec{
+		Entrypoint: "python /home/ray/samples/sample_code.py",
+		Metadata: map[string]string{
+			"job_submission_id": "123",
+		},
+		RuntimeEnvYAML:          "mytest yaml",
+		TTLSecondsAfterFinished: &secondsValue,
+		RayClusterSpec:          &ClusterSpecTest.Spec,
+	},
+}
+
+var JobExistingClusterTest = rayv1api.RayJob{
+	ObjectMeta: metav1.ObjectMeta{
+		Name:      "test",
+		Namespace: "test",
+		Labels: map[string]string{
+			"ray.io/user": "user",
+		},
+	},
+	Spec: rayv1api.RayJobSpec{
+		Entrypoint:              "python /home/ray/samples/sample_code.py",
+		RuntimeEnvYAML:          "mytest yaml",
+		TTLSecondsAfterFinished: &secondsValue,
+		ClusterSelector: map[string]string{
+			util.RayClusterUserLabelKey: "test",
+		},
+	},
+}
+
+var JobExistingClusterSubmitterTest = rayv1api.RayJob{
+	ObjectMeta: metav1.ObjectMeta{
+		Name:      "test",
+		Namespace: "test",
+		Labels: map[string]string{
+			"ray.io/user": "user",
+		},
+	},
+	Spec: rayv1api.RayJobSpec{
+		Entrypoint:              "python /home/ray/samples/sample_code.py",
+		RuntimeEnvYAML:          "mytest yaml",
+		TTLSecondsAfterFinished: &secondsValue,
+		ClusterSelector: map[string]string{
+			util.RayClusterUserLabelKey: "test",
+		},
+		SubmitterPodTemplate: &v1.PodTemplateSpec{
+			Spec: v1.PodSpec{
+				Containers: []v1.Container{
+					{
+						Name:  "test-submitter",
+						Image: "image",
+						Resources: v1.ResourceRequirements{
+							Limits: v1.ResourceList{
+								v1.ResourceCPU:    resource.MustParse("2"),
+								v1.ResourceMemory: resource.MustParse("1Gi"),
+							},
+							Requests: v1.ResourceList{
+								v1.ResourceCPU:    resource.MustParse("500m"),
+								v1.ResourceMemory: resource.MustParse("200Mi"),
+							},
+						},
+					},
+				},
+				RestartPolicy: v1.RestartPolicyNever,
+			},
+		},
+	},
+}
+
+var ServiceV1Test = rayv1api.RayService{
+	ObjectMeta: metav1.ObjectMeta{
+		Name:      "test",
+		Namespace: "test",
+		Labels: map[string]string{
+			"ray.io/user": "user",
+		},
+	},
+	Spec: rayv1api.RayServiceSpec{
+		ServeDeploymentGraphSpec: rayv1api.ServeDeploymentGraphSpec{
+			ImportPath: "fruit.deployment_graph",
+			RuntimeEnv: "working_dir: \"https://github.com/ray-project/test_dag/archive/41d09119cbdf8450599f993f51318e9e27c59098.zip\"",
+			ServeConfigSpecs: []rayv1api.ServeConfigSpec{
+				{
+					Name:        "MangoStand",
+					NumReplicas: &deploymentReplicas,
+					UserConfig:  "price: 3",
+					RayActorOptions: rayv1api.RayActorOptionSpec{
+						NumCpus: &floatNumber,
+					},
+				},
+				{
+					Name:        "OrangeStand",
+					NumReplicas: &deploymentReplicas,
+				},
+				{
+					Name:        "PearStand",
+					NumReplicas: &deploymentReplicas,
+					UserConfig:  "price: 1",
+					RayActorOptions: rayv1api.RayActorOptionSpec{
+						NumCpus: &floatNumber,
+					},
+				},
+			},
+		},
+		RayClusterSpec:                  ClusterSpecTest.Spec,
+		ServiceUnhealthySecondThreshold: &unhealthySecondThreshold,
+	},
+}
+
+var ServiceV2Test = rayv1api.RayService{
+	ObjectMeta: metav1.ObjectMeta{
+		Name:      "test",
+		Namespace: "test",
+		Labels: map[string]string{
+			"ray.io/user": "user",
+		},
+	},
+	Spec: rayv1api.RayServiceSpec{
+		ServeConfigV2:                      "Some yaml value",
+		RayClusterSpec:                     ClusterSpecTest.Spec,
+		DeploymentUnhealthySecondThreshold: &unhealthySecondThreshold,
 	},
 }
 
@@ -219,9 +381,39 @@ var expectedLabels = map[string]string{
 	"test": "value",
 }
 
-var expectedEnv = map[string]string{
-	"AWS_KEY":    "123",
-	"AWS_SECRET": "1234",
+var expectedHeadEnv = &api.EnvironmentVariables{
+	Values: map[string]string{
+		"AWS_KEY": "123",
+	},
+	ValuesFrom: map[string]*api.EnvValueFrom{
+		"REDIS_PASSWORD": {
+			Source: api.EnvValueFrom_SECRET,
+			Name:   "redis-password-secret",
+			Key:    "password",
+		},
+		"CONFIGMAP": {
+			Source: api.EnvValueFrom_CONFIGMAP,
+			Name:   "special-config",
+			Key:    "special.how",
+		},
+		"ResourceFieldRef": {
+			Source: api.EnvValueFrom_RESOURCEFIELD,
+			Name:   "my-container",
+			Key:    "resource",
+		},
+		"FieldRef": {
+			Source: api.EnvValueFrom_FIELD,
+			Key:    "path",
+		},
+	},
+}
+
+var expectedEnv = &api.EnvironmentVariables{
+	Values: map[string]string{
+		"AWS_KEY":    "123",
+		"AWS_SECRET": "1234",
+	},
+	ValuesFrom: map[string]*api.EnvValueFrom{},
 }
 
 var expectedTolerations = api.PodToleration{
@@ -248,13 +440,13 @@ func TestPopulateHeadNodeSpec(t *testing.T) {
 	if !reflect.DeepEqual(groupSpec.Labels, expectedLabels) {
 		t.Errorf("failed to convert labels, got %v, expected %v", groupSpec.Labels, expectedLabels)
 	}
-	if !reflect.DeepEqual(groupSpec.Environment, expectedEnv) {
-		t.Errorf("failed to convert annotations, got %v, expected %v", groupSpec.Environment, expectedEnv)
+	if !reflect.DeepEqual(groupSpec.Environment, expectedHeadEnv) {
+		t.Errorf("failed to convert environment, got %v, expected %v", groupSpec.Environment, expectedHeadEnv)
 	}
 }
 
 func TestPopulateWorkerNodeSpec(t *testing.T) {
-	groupSpec := PopulateWorkerNodeSpec([]v1alpha1.WorkerGroupSpec{workerSpecTest})[0]
+	groupSpec := PopulateWorkerNodeSpec([]rayv1api.WorkerGroupSpec{workerSpecTest})[0]
 
 	if groupSpec.ServiceAccount != "account" {
 		t.Errorf("failed to convert service account")
@@ -269,7 +461,7 @@ func TestPopulateWorkerNodeSpec(t *testing.T) {
 		t.Errorf("failed to convert labels, got %v, expected %v", groupSpec.Labels, expectedLabels)
 	}
 	if !reflect.DeepEqual(groupSpec.Environment, expectedEnv) {
-		t.Errorf("failed to convert annotations, got %v, expected %v", groupSpec.Environment, expectedEnv)
+		t.Errorf("failed to convert environment, got %v, expected %v", groupSpec.Environment, expectedEnv)
 	}
 }
 
@@ -300,4 +492,66 @@ func TestPopulateTemplate(t *testing.T) {
 
 func tolerationToString(toleration *api.PodToleration) string {
 	return "Key: " + toleration.Key + " Operator: " + string(toleration.Operator) + " Effect: " + string(toleration.Effect)
+}
+
+func TestPopulateJob(t *testing.T) {
+	job := FromCrdToApiJob(&JobNewClusterTest)
+	fmt.Printf("jobWithCluster = %#v\n", job)
+	assert.Equal(t, "test", job.Name)
+	assert.Equal(t, "test", job.Namespace)
+	assert.Equal(t, "user", job.User)
+	assert.Greater(t, len(job.RuntimeEnv), 1)
+	assert.Nil(t, job.ClusterSelector)
+	assert.NotNil(t, job.ClusterSpec)
+
+	job = FromCrdToApiJob(&JobExistingClusterTest)
+	fmt.Printf("jobReferenceCluster = %#v\n", job)
+	assert.Equal(t, "test", job.Name)
+	assert.Equal(t, "test", job.Namespace)
+	assert.Equal(t, "user", job.User)
+	assert.Greater(t, len(job.RuntimeEnv), 1)
+	assert.NotNil(t, job.ClusterSelector)
+	assert.Nil(t, job.ClusterSpec)
+
+	job = FromCrdToApiJob(&JobExistingClusterSubmitterTest)
+	fmt.Printf("jobReferenceCluster = %#v\n", job)
+	assert.Equal(t, "test", job.Name)
+	assert.Equal(t, "test", job.Namespace)
+	assert.Equal(t, "user", job.User)
+	assert.Greater(t, len(job.RuntimeEnv), 1)
+	assert.NotNil(t, job.ClusterSelector)
+	assert.Nil(t, job.ClusterSpec)
+	assert.Equal(t, "image", job.JobSubmitter.Image)
+	assert.Equal(t, "2", job.JobSubmitter.Cpu)
+}
+
+func TestPopulateService(t *testing.T) {
+	service := FromCrdToApiService(&ServiceV1Test, make([]v1.Event, 0))
+	fmt.Printf("serviceV1 = %#v\n", service)
+	if service.Name != "test" {
+		t.Errorf("failed to convert name")
+	}
+	if service.Namespace != "test" {
+		t.Errorf("failed to convert namespace")
+	}
+	if service.User != "user" {
+		t.Errorf("failed to convert user")
+	}
+	if service.ServeDeploymentGraphSpec == nil {
+		t.Errorf("failed to convert v1 serve spec")
+	}
+	if service.ServeConfig_V2 != "" {
+		t.Errorf("unexpected v2 server spec")
+	}
+	if len(service.ServeDeploymentGraphSpec.ServeConfigs) != 3 {
+		t.Errorf("failed to convert serveConfiggs")
+	}
+	service = FromCrdToApiService(&ServiceV2Test, make([]v1.Event, 0))
+	fmt.Printf("serviceV2 = %#v\n", service)
+	if service.ServeDeploymentGraphSpec != nil {
+		t.Errorf("unexpected v1 serve spec")
+	}
+	if service.ServeConfig_V2 == "" {
+		t.Errorf("failed to convert v2 server spec")
+	}
 }

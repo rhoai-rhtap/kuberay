@@ -2,7 +2,7 @@
 # file demonstrates how to change the port to 9000. To achieve this, follow these steps:
 # (1) Modify `spec.serveConfig.port` to 9000.
 # (2) Modify the container `ray-head`'s `serve` port to 9000.
-apiVersion: ray.io/v1alpha1
+apiVersion: ray.io/v1
 kind: RayService
 metadata:
   name: rayservice-sample
@@ -43,7 +43,7 @@ spec:
           numCpus: 0.1
     port: 9000
   rayClusterConfig:
-    rayVersion: '2.6.3' # should match the Ray version in the image of the containers
+    rayVersion: '2.7.0' # should match the Ray version in the image of the containers
     ######################headGroupSpecs#################################
     # Ray head pod template.
     headGroupSpec:
@@ -55,7 +55,7 @@ spec:
         spec:
           containers:
             - name: ray-head
-              image: rayproject/ray:2.6.3
+              image: rayproject/ray:2.7.0
               resources:
                 limits:
                   cpu: 2
@@ -85,7 +85,7 @@ spec:
           spec:
             containers:
               - name: ray-worker # must consist of lower case alphanumeric characters or '-', and must start and end with an alphanumeric character (e.g. 'my-name',  or '123-abc'
-                image: rayproject/ray:2.6.3
+                image: rayproject/ray:2.7.0
                 lifecycle:
                   preStop:
                     exec:

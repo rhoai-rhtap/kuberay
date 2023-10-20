@@ -10,14 +10,14 @@ import (
 	klog "k8s.io/klog/v2"
 
 	api "github.com/ray-project/kuberay/proto/go_client"
-	rayalphaapi "github.com/ray-project/kuberay/ray-operator/apis/ray/v1alpha1"
+	rayv1api "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type RayCluster struct {
-	*rayalphaapi.RayCluster
+	*rayv1api.RayCluster
 }
 
 // NewRayCluster creates a RayCluster.
@@ -29,7 +29,7 @@ func NewRayCluster(apiCluster *api.Cluster, computeTemplateMap map[string]*api.C
 		return nil, err
 	}
 	// Build cluster
-	rayCluster := &rayalphaapi.RayCluster{
+	rayCluster := &rayv1api.RayCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        apiCluster.Name,
 			Namespace:   apiCluster.Namespace,
@@ -64,22 +64,22 @@ func buildRayClusterAnnotations(cluster *api.Cluster) map[string]string {
 
 // TODO(Basasuya & MissionToMars): The job spec depends on ClusterSpec which not all cluster-related configs are included,
 // such as `metadata` and `envs`. We just put `imageVersion` and `envs` in the arguments list, and should be refactored later.
-func buildRayClusterSpec(imageVersion string, envs map[string]string, clusterSpec *api.ClusterSpec, computeTemplateMap map[string]*api.ComputeTemplate) (*rayalphaapi.RayClusterSpec, error) {
+func buildRayClusterSpec(imageVersion string, envs *api.EnvironmentVariables, clusterSpec *api.ClusterSpec, computeTemplateMap map[string]*api.ComputeTemplate) (*rayv1api.RayClusterSpec, error) {
 	computeTemplate := computeTemplateMap[clusterSpec.HeadGroupSpec.ComputeTemplate]
 	headPodTemplate, err := buildHeadPodTemplate(imageVersion, envs, clusterSpec.HeadGroupSpec, computeTemplate)
 	if err != nil {
 		return nil, err
 	}
 	headReplicas := int32(1)
-	rayClusterSpec := &rayalphaapi.RayClusterSpec{
+	rayClusterSpec := &rayv1api.RayClusterSpec{
 		RayVersion: imageVersion,
-		HeadGroupSpec: rayalphaapi.HeadGroupSpec{
+		HeadGroupSpec: rayv1api.HeadGroupSpec{
 			ServiceType:    v1.ServiceType(clusterSpec.HeadGroupSpec.ServiceType),
 			Template:       *headPodTemplate,
 			Replicas:       &headReplicas,
 			RayStartParams: clusterSpec.HeadGroupSpec.RayStartParams,
 		},
-		WorkerGroupSpecs: []rayalphaapi.WorkerGroupSpec{},
+		WorkerGroupSpecs: []rayv1api.WorkerGroupSpec{},
 	}
 
 	// If enable ingress is specified, add it to the head node spec.
@@ -104,7 +104,7 @@ func buildRayClusterSpec(imageVersion string, envs map[string]string, clusterSpe
 			maxReplicas = spec.MaxReplicas
 		}
 
-		workerNodeSpec := rayalphaapi.WorkerGroupSpec{
+		workerNodeSpec := rayv1api.WorkerGroupSpec{
 			GroupName:      spec.GroupName,
 			MinReplicas:    intPointer(minReplicas),
 			MaxReplicas:    intPointer(maxReplicas),
@@ -128,7 +128,7 @@ func buildNodeGroupAnnotations(computeTemplate *api.ComputeTemplate, image strin
 }
 
 // Build head node template
-func buildHeadPodTemplate(imageVersion string, envs map[string]string, spec *api.HeadGroupSpec, computeRuntime *api.ComputeTemplate) (*v1.PodTemplateSpec, error) {
+func buildHeadPodTemplate(imageVersion string, envs *api.EnvironmentVariables, spec *api.HeadGroupSpec, computeRuntime *api.ComputeTemplate) (*v1.PodTemplateSpec, error) {
 	image := constructRayImage(RayClusterDefaultImageRepository, imageVersion)
 	if len(spec.Image) != 0 {
 		image = spec.Image
@@ -215,20 +215,17 @@ func buildHeadPodTemplate(imageVersion string, envs map[string]string, spec *api
 			container.Resources.Requests[v1.ResourceName(accelerator)] = resource.MustParse(fmt.Sprint(gpu))
 			container.Resources.Limits[v1.ResourceName(accelerator)] = resource.MustParse(fmt.Sprint(gpu))
 		}
-		for k, v := range envs {
-			container.Env = append(container.Env, v1.EnvVar{
-				Name: k, Value: v,
-			})
+		globalEnv := convertEnvironmentVariables(envs)
+		if len(globalEnv) > 0 {
+			container.Env = append(container.Env, globalEnv...)
 		}
 
 		// Add specific environments
-		if spec.Environment != nil {
-			for key, value := range spec.Environment {
-				container.Env = append(container.Env, v1.EnvVar{
-					Name: key, Value: value,
-				})
-			}
+		specEnv := convertEnvironmentVariables(spec.Environment)
+		if len(specEnv) > 0 {
+			container.Env = append(container.Env, specEnv...)
 		}
+
 		// Replace container
 		podTemplateSpec.Spec.Containers[index] = container
 	}
@@ -273,6 +270,73 @@ func buildHeadPodTemplate(imageVersion string, envs map[string]string, spec *api
 	return &podTemplateSpec, nil
 }
 
+// Convert environment variables
+func convertEnvironmentVariables(envs *api.EnvironmentVariables) []v1.EnvVar {
+	converted := []v1.EnvVar{}
+	if envs == nil {
+		return converted
+	}
+	if envs.Values != nil && len(envs.Values) > 0 {
+		// Add values
+		for key, value := range envs.Values {
+			converted = append(converted, v1.EnvVar{
+				Name: key, Value: value,
+			})
+		}
+	}
+	if envs.ValuesFrom != nil && len(envs.ValuesFrom) > 0 {
+		// Add values ref
+		for key, value := range envs.ValuesFrom {
+			switch value.Source {
+			case api.EnvValueFrom_CONFIGMAP:
+				converted = append(converted, v1.EnvVar{
+					Name: key,
+					ValueFrom: &v1.EnvVarSource{
+						ConfigMapKeyRef: &v1.ConfigMapKeySelector{
+							LocalObjectReference: v1.LocalObjectReference{
+								Name: value.Name,
+							},
+							Key: value.Key,
+						},
+					},
+				})
+			case api.EnvValueFrom_SECRET:
+				converted = append(converted, v1.EnvVar{
+					Name: key,
+					ValueFrom: &v1.EnvVarSource{
+						SecretKeyRef: &v1.SecretKeySelector{
+							LocalObjectReference: v1.LocalObjectReference{
+								Name: value.Name,
+							},
+							Key: value.Key,
+						},
+					},
+				})
+			case api.EnvValueFrom_RESOURCEFIELD:
+				converted = append(converted, v1.EnvVar{
+					Name: key,
+					ValueFrom: &v1.EnvVarSource{
+						ResourceFieldRef: &v1.ResourceFieldSelector{
+							ContainerName: value.Name,
+							Resource:      value.Key,
+						},
+					},
+				})
+			default:
+				converted = append(converted, v1.EnvVar{
+					Name: key,
+					ValueFrom: &v1.EnvVarSource{
+						FieldRef: &v1.ObjectFieldSelector{
+							FieldPath: value.Key,
+						},
+					},
+				})
+			}
+		}
+	}
+	return converted
+}
+
 // Convert Toleration operator from string
 func convertTolerationOperator(val string) v1.TolerationOperator {
 	if val == "Exists" {
@@ -298,7 +362,7 @@ func constructRayImage(containerImage string, version string) string {
 }
 
 // Build worker pod template
-func buildWorkerPodTemplate(imageVersion string, envs map[string]string, spec *api.WorkerGroupSpec, computeRuntime *api.ComputeTemplate) (*v1.PodTemplateSpec, error) {
+func buildWorkerPodTemplate(imageVersion string, envs *api.EnvironmentVariables, spec *api.WorkerGroupSpec, computeRuntime *api.ComputeTemplate) (*v1.PodTemplateSpec, error) {
 	// If user doesn't provide the image, let's use the default image instead.
 	// TODO: verify the versions in the range
 	image := constructRayImage(RayClusterDefaultImageRepository, imageVersion)
@@ -436,20 +500,17 @@ func buildWorkerPodTemplate(imageVersion string, envs map[string]string, spec *a
 			container.Resources.Limits[v1.ResourceName(accelerator)] = resource.MustParse(fmt.Sprint(gpu))
 		}
 
-		for k, v := range envs {
-			container.Env = append(container.Env, v1.EnvVar{
-				Name: k, Value: v,
-			})
+		globalEnv := convertEnvironmentVariables(envs)
+		if len(globalEnv) > 0 {
+			container.Env = append(container.Env, globalEnv...)
 		}
 
 		// Add specific environments
-		if spec.Environment != nil {
-			for key, value := range spec.Environment {
-				container.Env = append(container.Env, v1.EnvVar{
-					Name: key, Value: value,
-				})
-			}
+		specEnv := convertEnvironmentVariables(spec.Environment)
+		if len(specEnv) > 0 {
+			container.Env = append(container.Env, specEnv...)
 		}
+
 		// Replace container
 		podTemplateSpec.Spec.Containers[index] = container
 	}
@@ -529,6 +590,65 @@ func newHostPathType(pathType string) *v1.HostPathType {
 func buildVols(apiVolumes []*api.Volume) ([]v1.Volume, error) {
 	var vols []v1.Volume
 	for _, rayVol := range apiVolumes {
+		if rayVol.VolumeType == api.Volume_CONFIGMAP {
+			vol := v1.Volume{
+				Name: rayVol.Name,
+				VolumeSource: v1.VolumeSource{
+					ConfigMap: &v1.ConfigMapVolumeSource{
+						LocalObjectReference: v1.LocalObjectReference{
+							Name: rayVol.Source,
+						},
+					},
+				},
+			}
+			if len(rayVol.Items) > 0 {
+				// Add items
+				items := []v1.KeyToPath{}
+				for key, value := range rayVol.Items {
+					items = append(items, v1.KeyToPath{Key: key, Path: value})
+				}
+				vol.ConfigMap.Items = items
+			}
+			vols = append(vols, vol)
+		}
+		if rayVol.VolumeType == api.Volume_SECRET {
+			vol := v1.Volume{
+				Name: rayVol.Name,
+				VolumeSource: v1.VolumeSource{
+					Secret: &v1.SecretVolumeSource{
+						SecretName: rayVol.Source,
+					},
+				},
+			}
+			if len(rayVol.Items) > 0 {
+				// Add items
+				items := []v1.KeyToPath{}
+				for key, value := range rayVol.Items {
+					items = append(items, v1.KeyToPath{Key: key, Path: value})
+				}
+				vol.Secret.Items = items
+			}
+			vols = append(vols, vol)
+		}
+		if rayVol.VolumeType == api.Volume_EMPTY_DIR {
+			vol := v1.Volume{
+				Name: rayVol.Name,
+				VolumeSource: v1.VolumeSource{
+					EmptyDir: &v1.EmptyDirVolumeSource{},
+				},
+			}
+			if rayVol.Storage != "" {
+				// Max Storage size is  defined
+				// Ensure that storage size is formatted correctly
+				_, err := resource.ParseQuantity(rayVol.Storage)
+				if err != nil {
+					return nil, errors.New("storage for empty dir volume is not specified correctly")
+				}
+				limit := resource.MustParse(rayVol.Storage)
+				vol.EmptyDir.SizeLimit = &limit
+			}
+			vols = append(vols, vol)
+		}
 		if rayVol.VolumeType == api.Volume_HOST_PATH {
 			vol := v1.Volume{
 				Name: rayVol.Name,
@@ -628,8 +748,8 @@ func intPointer(value int32) *int32 {
 	return &value
 }
 
-// Get converts this object to a rayalphaapi.Workflow.
-func (c *RayCluster) Get() *rayalphaapi.RayCluster {
+// Get converts this object to a rayv1api.Workflow.
+func (c *RayCluster) Get() *rayv1api.RayCluster {
 	return c.RayCluster
 }
 

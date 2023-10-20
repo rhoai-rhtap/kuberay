@@ -40,45 +40,6 @@
         "tags": [
           "RayJobService"
         ]
-      },
-      "post": {
-        "summary": "Creates a new job.",
-        "operationId": "RayJobService_CreateRayJob",
-        "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/protoRayJob"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/googlerpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "body",
-            "description": "The job to be created.",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/protoRayJob"
-            }
-          },
-          {
-            "name": "namespace",
-            "description": "The namespace of the job to be created.",
-            "in": "query",
-            "required": false,
-            "type": "string"
-          }
-        ],
-        "tags": [
-          "RayJobService"
-        ]
       }
     },
     "/apis/v1alpha2/namespaces/{namespace}/jobs": {
@@ -102,10 +63,49 @@
         "parameters": [
           {
             "name": "namespace",
-            "description": "The namespace of the job to be retrieved.",
+            "description": "Required. The namespace of the job to be retrieved.",
             "in": "path",
             "required": true,
             "type": "string"
+          }
+        ],
+        "tags": [
+          "RayJobService"
+        ]
+      },
+      "post": {
+        "summary": "Creates a new job.",
+        "operationId": "RayJobService_CreateRayJob",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/protoRayJob"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/googlerpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "namespace",
+            "description": "Required. The namespace of the job to be created",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "description": "Required. The job to be created.",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/protoRayJob"
+            }
           }
         ],
         "tags": [
@@ -134,14 +134,14 @@
         "parameters": [
           {
             "name": "namespace",
-            "description": "The namespace of the job to be retrieved.",
+            "description": "Required. The namespace of the job to be retrieved.",
             "in": "path",
             "required": true,
             "type": "string"
           },
           {
             "name": "name",
-            "description": "The name of the job to be retrieved.",
+            "description": "Required. The name of the job to be retrieved.",
             "in": "path",
             "required": true,
             "type": "string"
@@ -171,14 +171,14 @@
         "parameters": [
           {
             "name": "namespace",
-            "description": "The namespace of the job to be deleted.",
+            "description": "Required. The namespace of the job to be deleted.",
             "in": "path",
             "required": true,
             "type": "string"
           },
           {
             "name": "name",
-            "description": "The name of the job to be deleted.",
+            "description": "Required. The name of the job to be deleted.",
             "in": "path",
             "required": true,
             "type": "string"
@@ -191,6 +191,17 @@
     }
   },
   "definitions": {
+    "EnvValueFromSource": {
+      "type": "string",
+      "enum": [
+        "CONFIGMAP",
+        "SECRET",
+        "RESOURCEFIELD",
+        "FIELD"
+      ],
+      "default": "CONFIGMAP",
+      "title": "Source of environment variable"
+    },
     "VolumeAccessMode": {
       "type": "string",
       "enum": [
@@ -223,7 +234,10 @@
       "enum": [
         "PERSISTENT_VOLUME_CLAIM",
         "HOST_PATH",
-        "EPHEMERAL"
+        "EPHEMERAL",
+        "CONFIGMAP",
+        "SECRET",
+        "EMPTY_DIR"
       ],
       "default": "PERSISTENT_VOLUME_CLAIM"
     },
@@ -250,23 +264,61 @@
       "properties": {
         "headGroupSpec": {
           "$ref": "#/definitions/protoHeadGroupSpec",
-          "title": "The head group configuration"
+          "title": "Required. The head group configuration"
         },
         "workerGroupSpec": {
           "type": "array",
           "items": {
             "$ref": "#/definitions/protoWorkerGroupSpec"
           },
-          "title": "The worker group configurations"
+          "title": "Optional. The worker group configurations"
+        }
+      },
+      "description": "Cluster specification."
+    },
+    "protoEnvValueFrom": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "$ref": "#/definitions/EnvValueFromSource"
+        },
+        "name": {
+          "type": "string",
+          "title": "Name for config map or secret, container name for resource, path for field"
+        },
+        "key": {
+          "type": "string",
+          "title": "Key for config map or secret, resource name for resource"
         }
       }
+    },
+    "protoEnvironmentVariables": {
+      "type": "object",
+      "properties": {
+        "values": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "valuesFrom": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/protoEnvValueFrom"
+          }
+        }
+      },
+      "title": "This allows to specify both - environment variables containing values and environment values containing valueFrom"
     },
     "protoHeadGroupSpec": {
       "type": "object",
       "properties": {
         "computeTemplate": {
           "type": "string",
-          "title": "Optional. The computeTemplate of head node group"
+          "title": "Required. The computeTemplate of head node group",
+          "required": [
+            "compute_template"
+          ]
         },
         "image": {
           "type": "string",
@@ -285,7 +337,10 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Optional. The ray start params of head node group."
+          "description": "Required. The ray start params of head node group.",
+          "required": [
+            "ray_start_params"
+          ]
         },
         "volumes": {
           "type": "array",
@@ -303,10 +358,7 @@
           "title": "Optional. image pull secret used by head pod"
         },
         "environment": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          },
+          "$ref": "#/definitions/protoEnvironmentVariables",
           "title": "Optional. Environment variables for head pod"
         },
         "annotations": {
@@ -323,7 +375,12 @@
           },
           "title": "Optional. Labels for the head pod"
         }
-      }
+      },
+      "title": "Cluster HeadGroup specification",
+      "required": [
+        "computeTemplate",
+        "rayStartParams"
+      ]
     },
     "protoListAllRayJobsResponse": {
       "type": "object",
@@ -332,7 +389,8 @@
           "type": "array",
           "items": {
             "$ref": "#/definitions/protoRayJob"
-          }
+          },
+          "readOnly": true
         }
       }
     },
@@ -343,7 +401,8 @@
           "type": "array",
           "items": {
             "$ref": "#/definitions/protoRayJob"
-          }
+          },
+          "readOnly": true
         }
       }
     },
@@ -352,15 +411,24 @@
       "properties": {
         "name": {
           "type": "string",
-          "description": "Required input field. Unique job name provided by user."
+          "description": "Required input field. Unique job name provided by user.",
+          "required": [
+            "name"
+          ]
         },
         "namespace": {
           "type": "string",
-          "title": "Required input field. job namespace provided by user"
+          "title": "Required input field. job namespace provided by user",
+          "required": [
+            "namespace"
+          ]
         },
         "user": {
           "type": "string",
-          "description": "Required field. This field indicates the user who owns the job."
+          "description": "Required field. This field indicates the user who owns the job.",
+          "required": [
+            "user"
+          ]
         },
         "entrypoint": {
           "type": "string",
@@ -371,60 +439,111 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Metadata is data to store along with this job."
+          "description": "Optional. Metadata is data to store along with this job."
         },
         "runtimeEnv": {
           "type": "string",
-          "title": "RuntimeEnv is base64 encoded string which stores runtime configuration"
+          "title": "Optional. RuntimeEnv is a Yaml string which maps to the RuntimeEnvYAML field of the RayJobSpec"
         },
         "jobId": {
           "type": "string",
-          "description": "If jobId is not set, a new jobId will be auto-generated."
+          "description": "Optional. If jobId is not set, a new jobId will be auto-generated."
         },
         "shutdownAfterJobFinishes": {
           "type": "boolean",
-          "title": "If set to true, the rayCluster will be deleted after the rayJob finishes"
+          "description": "Optional. If set to true, the rayCluster will be deleted after the rayJob finishes. Defaults to false."
         },
         "clusterSelector": {
           "type": "object",
           "additionalProperties": {
             "type": "string"
           },
-          "title": "The label selector to choose exiting clusters"
+          "description": "Optional. The label selectors to choose exiting clusters. If not specified, cluster_spec must be set."
         },
         "clusterSpec": {
           "$ref": "#/definitions/protoClusterSpec",
-          "title": "The cluster template"
+          "description": "Optional. The cluster template, required if the cluster_selector is not specified."
         },
         "ttlSecondsAfterFinished": {
           "type": "integer",
           "format": "int32",
-          "description": "TTLSecondsAfterFinished is the TTL to clean up RayCluster."
+          "description": "Optional. TTLSecondsAfterFinished is the TTL to clean up RayCluster."
+        },
+        "jobSubmitter": {
+          "$ref": "#/definitions/protoRayJobSubmitter",
+          "title": "Optional Ray Job submitter"
+        },
+        "entrypointNumCpus": {
+          "type": "number",
+          "format": "float",
+          "description": "Optional entrypointNumCpus specifies the number of cpus to reserve for the entrypoint command."
+        },
+        "entrypointNumGpus": {
+          "type": "number",
+          "format": "float",
+          "description": "Optional entrypointNumGpus specifies the number of gpus to reserve for the entrypoint command."
+        },
+        "entrypointResources": {
+          "type": "string",
+          "description": "Optional entrypointResources specifies the custom resources and quantities to reserve \nfor the entrypoint command."
         },
         "createdAt": {
           "type": "string",
           "format": "date-time",
-          "description": "Output. The time that the job created."
+          "description": "Output. The time that the job created.",
+          "readOnly": true
         },
         "deleteAt": {
           "type": "string",
           "format": "date-time",
-          "description": "Output. The time that the job deleted."
+          "description": "Output. The time that the job deleted.",
+          "readOnly": true
         },
         "jobStatus": {
           "type": "string",
-          "title": "Output. The current job status"
+          "title": "Output. The current job status",
+          "readOnly": true
         },
         "jobDeploymentStatus": {
           "type": "string",
-          "title": "Output. The current job deployment status"
+          "title": "Output. The current job deployment status",
+          "readOnly": true
         },
         "message": {
           "type": "string",
-          "description": "Output. A human-readable description of the status of this operation."
+          "description": "Output. A human-readable description of the status of this operation.",
+          "readOnly": true
         }
       },
-      "title": "RayJob defination"
+      "title": "RayJob definition",
+      "required": [
+        "name",
+        "namespace",
+        "user"
+      ]
+    },
+    "protoRayJobSubmitter": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "type": "string",
+          "title": "Required base image for job submitter. Make sure that Python/Ray version\nof the image corresponds to the one used in the cluster",
+          "required": [
+            "image"
+          ]
+        },
+        "cpu": {
+          "type": "string",
+          "title": "Optional number of CPUs for submitter - default \"1\""
+        },
+        "memory": {
+          "type": "string",
+          "title": "Optional memory for the submitter - default \"1Gi\""
+        }
+      },
+      "required": [
+        "image"
+      ]
     },
     "protoVolume": {
       "type": "object",
@@ -459,6 +578,12 @@
         },
         "storage": {
           "type": "string"
+        },
+        "items": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       }
     },
@@ -467,11 +592,17 @@
       "properties": {
         "groupName": {
           "type": "string",
-          "title": "Required. Group name of the current worker group"
+          "title": "Required. Group name of the current worker group",
+          "required": [
+            "group_name"
+          ]
         },
         "computeTemplate": {
           "type": "string",
-          "title": "Optional. The computeTemplate of head node group"
+          "title": "Required. The computeTemplate of head node group",
+          "required": [
+            "compute_template"
+          ]
         },
         "image": {
           "type": "string",
@@ -480,24 +611,33 @@
         "replicas": {
           "type": "integer",
           "format": "int32",
-          "title": "Required. Desired replicas of the worker group"
+          "title": "Required. Desired replicas of the worker group",
+          "required": [
+            "replicas"
+          ]
         },
         "minReplicas": {
           "type": "integer",
           "format": "int32",
-          "title": "Optional. Min replicas of the worker group"
+          "description": "Optional. Min replicas of the worker group, can't be greater than max_replicas."
         },
         "maxReplicas": {
           "type": "integer",
           "format": "int32",
-          "title": "Optional. Max replicas of the worker group"
+          "title": "Required. Max replicas of the worker group (\u003e0)",
+          "required": [
+            "max_replicas"
+          ]
         },
         "rayStartParams": {
           "type": "object",
           "additionalProperties": {
             "type": "string"
           },
-          "title": "Optional. The ray start parames of worker node group"
+          "title": "Required. The ray start parameters of worker node group",
+          "required": [
+            "ray_start_params"
+          ]
         },
         "volumes": {
           "type": "array",
@@ -515,10 +655,7 @@
           "title": "Optional. image pull secret used by worker pod"
         },
         "environment": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          },
+          "$ref": "#/definitions/protoEnvironmentVariables",
           "title": "Optional. Environment variables for worker pod"
         },
         "annotations": {
@@ -535,7 +672,14 @@
           },
           "title": "Optional. Labels for the worker pod"
         }
-      }
+      },
+      "required": [
+        "groupName",
+        "computeTemplate",
+        "replicas",
+        "maxReplicas",
+        "rayStartParams"
+      ]
     },
     "protobufAny": {
       "type": "object",

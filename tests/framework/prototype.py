@@ -108,7 +108,7 @@ def show_cluster_info(cr_namespace):
     operator_namespace = shell_subprocess_check_output('kubectl get pods '
         '-l app.kubernetes.io/component=kuberay-operator -A '
         '-o jsonpath={".items[0].metadata.namespace"}')
-    shell_subprocess_run("kubectl logs -l app.kubernetes.io/component=kuberay-operator -n "
+    shell_subprocess_check_output("kubectl logs -l app.kubernetes.io/component=kuberay-operator -n "
         f'{operator_namespace.decode("utf-8")} --tail=-1')
 
 # Configuration Test Framework Abstractions: (1) Mutator (2) Rule (3) RuleSet (4) CREvent
@@ -253,7 +253,7 @@ class ShutdownJobRule(Rule):
         logger.info("Waiting for RayCluster to be deleted...")
         for i in range(30):
             rayclusters = custom_api.list_namespaced_custom_object(
-                group = 'ray.io', version = 'v1alpha1', namespace = cr_namespace,
+                group = 'ray.io', version = 'v1', namespace = cr_namespace,
                 plural = 'rayclusters')
             # print debug log
             if i != 0:
@@ -266,7 +266,7 @@ class ShutdownJobRule(Rule):
             raise TimeoutError("RayCluster hasn't been deleted in 30 seconds.")
 
         logger.info("RayCluster has been deleted.")
-        
+
 
 
     def trigger_condition(self, custom_resource=None) -> bool:
@@ -390,11 +390,9 @@ class RayClusterAddCREvent(CREvent):
 
     def clean_up(self):
         """Delete added RayCluster"""
-        if not self.filepath:
-            delete_custom_object(CONST.RAY_CLUSTER_CRD,
-                self.namespace, self.custom_resource_object['metadata']['name'])
-        else:
-            shell_subprocess_run(f"kubectl delete -n {self.namespace} -f {self.filepath}")
+        delete_custom_object(CONST.RAY_CLUSTER_CRD,
+            self.namespace, self.custom_resource_object['metadata']['name'])
+
         # Wait pods to be deleted
         converge = False
         k8s_v1_api = K8S_CLUSTER_MANAGER.k8s_client_dict[CONST.K8S_V1_CLIENT_KEY]
@@ -404,7 +402,9 @@ class RayClusterAddCREvent(CREvent):
                 namespace = self.namespace, label_selector='ray.io/node-type=head')
             workerpods = k8s_v1_api.list_namespaced_pod(
                 namespace = self.namespace, label_selector='ray.io/node-type=worker')
-            if (len(headpods.items) == 0 and len(workerpods.items) == 0):
+            rediscleanuppods = k8s_v1_api.list_namespaced_pod(
+                namespace = self.namespace, label_selector='ray.io/node-type=redis-cleanup')
+            if (len(headpods.items) == 0 and len(workerpods.items) == 0 and len(rediscleanuppods.items) == 0):
                 converge = True
                 logger.info("--- Cleanup RayCluster %s seconds ---", time.time() - start_time)
                 break
@@ -416,6 +416,15 @@ class RayClusterAddCREvent(CREvent):
             logger.info("expected_head_pods: 0, expected_worker_pods: 0")
             show_cluster_info(self.namespace)
             raise Exception("RayClusterAddCREvent clean_up() timeout")
+
+        """Make sure the external redis has been cleaned"""
+        if search_path(self.custom_resource_object, ['metadata', 'annotations', 'ray.io/ft-enabled']) == 'true':
+            if shell_subprocess_run("test $(kubectl exec deploy/redis -- redis-cli --no-auth-warning -a $(kubectl get secret redis-password-secret -o jsonpath='{.data.password}' | base64 --decode) DBSIZE) = '0'") != 0:
+                raise Exception("The external redis is not cleaned")
+
+        """Delete other resources in the yaml"""
+        if self.filepath:
+            shell_subprocess_run(f"kubectl delete -n {self.namespace} -f {self.filepath} --ignore-not-found=true")
 
 class RayServiceFullCREvent(CREvent):
     """CREvent for RayService addition"""
@@ -491,17 +500,21 @@ class RayJobAddCREvent(CREvent):
         expected_head_pods = get_expected_head_pods(self.custom_resource_object)
         expected_worker_pods = get_expected_worker_pods(self.custom_resource_object)
         expected_rayclusters = 1
+        expected_job_pods = 1
         # Wait until:
         #   (1) The number of head pods and worker pods are as expected.
         #   (2) All head pods and worker pods are "Running".
         #   (3) A RayCluster has been created.
-        #   (4) RayJob named "rayjob-sample" has status "SUCCEEDED".
+        #   (4) Exactly one Job pod has been created.
+        #   (5) RayJob named "rayjob-sample" has status "SUCCEEDED".
+        # We check the `expected_job_pods = 1` condition to catch situations described in
+        # https://github.com/ray-project/kuberay/issues/1381
         converge = False
         k8s_v1_api = K8S_CLUSTER_MANAGER.k8s_client_dict[CONST.K8S_V1_CLIENT_KEY]
         custom_api = K8S_CLUSTER_MANAGER.k8s_client_dict[CONST.K8S_CR_CLIENT_KEY]
         for i in range(self.timeout):
             rayclusters = custom_api.list_namespaced_custom_object(
-                group = 'ray.io', version = 'v1alpha1', namespace = self.namespace,
+                group = 'ray.io', version = 'v1', namespace = self.namespace,
                 plural = 'rayclusters')["items"]
             headpods = k8s_v1_api.list_namespaced_pod(
                 namespace = self.namespace, label_selector='ray.io/node-type=head')
@@ -509,9 +522,12 @@ class RayJobAddCREvent(CREvent):
                 namespace = self.namespace, label_selector='ray.io/node-type=worker')
             rayjob = get_custom_object(CONST.RAY_JOB_CRD, self.namespace,
                 self.custom_resource_object['metadata']['name'])
+            jobpods = k8s_v1_api.list_namespaced_pod(
+                namespace = self.namespace, label_selector='job-name='+self.custom_resource_object['metadata']['name'])
 
             if (len(headpods.items) == expected_head_pods
                     and len(workerpods.items) == expected_worker_pods
+                    and len(jobpods.items) == expected_job_pods
                     and check_pod_running(headpods.items) and check_pod_running(workerpods.items)
                     and rayjob.get('status') is not None
                     and rayjob.get('status').get('jobStatus') == "SUCCEEDED"
@@ -532,6 +548,9 @@ class RayJobAddCREvent(CREvent):
                     if len(workerpods.items) != expected_worker_pods:
                         logger.info("expected_worker_pods: %d, actual_worker_pods: %d",
                             expected_worker_pods, len(workerpods.items))
+                    if len(jobpods.items) != expected_job_pods:
+                        logger.info("expected_job_pods: %d, actual_job_pods: %d",
+                            expected_job_pods, len(jobpods.items))
                     if not check_pod_running(headpods.items):
                         logger.info("head pods are not running yet.")
                     if not check_pod_running(workerpods.items):

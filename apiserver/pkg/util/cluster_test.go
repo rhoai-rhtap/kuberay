@@ -2,6 +2,7 @@ package util
 
 import (
 	"reflect"
+	"sort"
 	"testing"
 
 	api "github.com/ray-project/kuberay/proto/go_client"
@@ -10,6 +11,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+var sizelimit = resource.MustParse("100Gi")
 
 var testVolume = &api.Volume{
 	Name:       "hdfs",
@@ -45,6 +48,31 @@ var testEphemeralVolume = &api.Volume{
 	Storage:    "10Gi",
 }
 
+var testConfigMapVolume = &api.Volume{
+	Name:       "configMap",
+	MountPath:  "/tmp/configmap",
+	VolumeType: api.Volume_CONFIGMAP,
+	Source:     "my-config-map",
+	Items: map[string]string{
+		"key1": "path1",
+		"key2": "path2",
+	},
+}
+
+var testSecretVolume = &api.Volume{
+	Name:       "secret",
+	MountPath:  "/tmp/secret",
+	VolumeType: api.Volume_SECRET,
+	Source:     "my-secret",
+}
+
+var testEmptyDirVolume = &api.Volume{
+	Name:       "emptyDir",
+	MountPath:  "/tmp/emptydir",
+	VolumeType: api.Volume_EMPTY_DIR,
+	Storage:    "100Gi",
+}
+
 // Spec for testing
 var headGroup = api.HeadGroupSpec{
 	ComputeTemplate: "foo",
@@ -58,8 +86,31 @@ var headGroup = api.HeadGroupSpec{
 	ServiceAccount:  "account",
 	ImagePullSecret: "foo",
 	EnableIngress:   true,
-	Environment: map[string]string{
-		"foo": "bar",
+	Environment: &api.EnvironmentVariables{
+		Values: map[string]string{
+			"AWS_KEY": "123",
+		},
+		ValuesFrom: map[string]*api.EnvValueFrom{
+			"REDIS_PASSWORD": {
+				Source: api.EnvValueFrom_SECRET,
+				Name:   "redis-password-secret",
+				Key:    "password",
+			},
+			"CONFIGMAP": {
+				Source: api.EnvValueFrom_CONFIGMAP,
+				Name:   "special-config",
+				Key:    "special.how",
+			},
+			"ResourceFieldRef": {
+				Source: api.EnvValueFrom_RESOURCEFIELD,
+				Name:   "my-container",
+				Key:    "resource",
+			},
+			"FieldRef": {
+				Source: api.EnvValueFrom_FIELD,
+				Key:    "path",
+			},
+		},
 	},
 	Annotations: map[string]string{
 		"foo": "bar",
@@ -81,8 +132,10 @@ var workerGroup = api.WorkerGroupSpec{
 	},
 	ServiceAccount:  "account",
 	ImagePullSecret: "foo",
-	Environment: map[string]string{
-		"foo": "bar",
+	Environment: &api.EnvironmentVariables{
+		Values: map[string]string{
+			"foo": "bar",
+		},
 	},
 	Annotations: map[string]string{
 		"foo": "bar",
@@ -128,6 +181,60 @@ var expectedToleration = v1.Toleration{
 
 var expectedLabels = map[string]string{
 	"foo": "bar",
+}
+
+var expectedHeadNodeEnv = []v1.EnvVar{
+	{
+		Name: "MY_POD_IP",
+		ValueFrom: &v1.EnvVarSource{
+			FieldRef: &v1.ObjectFieldSelector{
+				FieldPath: "status.podIP",
+			},
+		},
+	},
+	{
+		Name:  "AWS_KEY",
+		Value: "123",
+	},
+	{
+		Name: "REDIS_PASSWORD",
+		ValueFrom: &v1.EnvVarSource{
+			SecretKeyRef: &v1.SecretKeySelector{
+				LocalObjectReference: v1.LocalObjectReference{
+					Name: "redis-password-secret",
+				},
+				Key: "password",
+			},
+		},
+	},
+	{
+		Name: "CONFIGMAP",
+		ValueFrom: &v1.EnvVarSource{
+			ConfigMapKeyRef: &v1.ConfigMapKeySelector{
+				LocalObjectReference: v1.LocalObjectReference{
+					Name: "special-config",
+				},
+				Key: "special.how",
+			},
+		},
+	},
+	{
+		Name: "ResourceFieldRef",
+		ValueFrom: &v1.EnvVarSource{
+			ResourceFieldRef: &v1.ResourceFieldSelector{
+				ContainerName: "my-container",
+				Resource:      "resource",
+			},
+		},
+	},
+	{
+		Name: "FieldRef",
+		ValueFrom: &v1.EnvVarSource{
+			FieldRef: &v1.ObjectFieldSelector{
+				FieldPath: "path",
+			},
+		},
+	},
 }
 
 func TestBuildVolumes(t *testing.T) {
@@ -185,6 +292,45 @@ func TestBuildVolumes(t *testing.T) {
 		},
 	}
 
+	targetConfigMapVolume := v1.Volume{
+		Name: "configMap",
+		VolumeSource: v1.VolumeSource{
+			ConfigMap: &v1.ConfigMapVolumeSource{
+				LocalObjectReference: v1.LocalObjectReference{
+					Name: "my-config-map",
+				},
+				Items: []v1.KeyToPath{
+					{
+						Key:  "key1",
+						Path: "path1",
+					},
+					{
+						Key:  "key2",
+						Path: "path2",
+					},
+				},
+			},
+		},
+	}
+
+	targetSecretVolume := v1.Volume{
+		Name: "secret",
+		VolumeSource: v1.VolumeSource{
+			Secret: &v1.SecretVolumeSource{
+				SecretName: "my-secret",
+			},
+		},
+	}
+
+	targetEmptyDirVolume := v1.Volume{
+		Name: "emptyDir",
+		VolumeSource: v1.VolumeSource{
+			EmptyDir: &v1.EmptyDirVolumeSource{
+				SizeLimit: &sizelimit,
+			},
+		},
+	}
+
 	tests := []struct {
 		name      string
 		apiVolume []*api.Volume
@@ -207,11 +353,35 @@ func TestBuildVolumes(t *testing.T) {
 			[]*api.Volume{testEphemeralVolume},
 			[]v1.Volume{targetEphemeralVolume},
 		},
+		{
+			"configmap test",
+			[]*api.Volume{testConfigMapVolume},
+			[]v1.Volume{targetConfigMapVolume},
+		},
+		{
+			"secret test",
+			[]*api.Volume{testSecretVolume},
+			[]v1.Volume{targetSecretVolume},
+		},
+		{
+			"empty dir test",
+			[]*api.Volume{testEmptyDirVolume},
+			[]v1.Volume{targetEmptyDirVolume},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := buildVols(tt.apiVolume)
 			assert.Nil(t, err)
+			if tt.name == "configmap test" {
+				// Sort items for comparison
+				sort.SliceStable(got[0].ConfigMap.Items, func(i, j int) bool {
+					return got[0].ConfigMap.Items[i].Key < got[0].ConfigMap.Items[j].Key
+				})
+				sort.SliceStable(tt.expect[0].ConfigMap.Items, func(i, j int) bool {
+					return tt.expect[0].ConfigMap.Items[i].Key < tt.expect[0].ConfigMap.Items[j].Key
+				})
+			}
 			if !reflect.DeepEqual(got, tt.expect) {
 				t.Errorf("failed for %s ..., got %v, expected %v", tt.name, got, tt.expect)
 			}
@@ -270,7 +440,7 @@ func TestBuildVolumeMounts(t *testing.T) {
 }
 
 func TestBuildHeadPodTemplate(t *testing.T) {
-	podSpec, err := buildHeadPodTemplate("2.4", make(map[string]string), &headGroup, &template)
+	podSpec, err := buildHeadPodTemplate("2.4", &api.EnvironmentVariables{}, &headGroup, &template)
 	assert.Nil(t, err)
 
 	if podSpec.Spec.ServiceAccountName != "account" {
@@ -279,9 +449,21 @@ func TestBuildHeadPodTemplate(t *testing.T) {
 	if podSpec.Spec.ImagePullSecrets[0].Name != "foo" {
 		t.Errorf("failed to propagate image pull secret")
 	}
-	if !containsEnv(podSpec.Spec.Containers[0].Env, "foo", "bar") {
+	if len(podSpec.Spec.Containers[0].Env) != 6 {
 		t.Errorf("failed to propagate environment")
 	}
+	// Sort values for comparison
+	sort.SliceStable(podSpec.Spec.Containers[0].Env, func(i, j int) bool {
+		return podSpec.Spec.Containers[0].Env[i].Name < podSpec.Spec.Containers[0].Env[j].Name
+	})
+	sort.SliceStable(expectedHeadNodeEnv, func(i, j int) bool {
+		return expectedHeadNodeEnv[i].Name < expectedHeadNodeEnv[j].Name
+	})
+
+	if !reflect.DeepEqual(podSpec.Spec.Containers[0].Env, expectedHeadNodeEnv) {
+		t.Errorf("failed to convert environment, got %v, expected %v", podSpec.Spec.Containers[0].Env, expectedHeadNodeEnv)
+	}
+
 	if len(podSpec.Spec.Tolerations) != 1 {
 		t.Errorf("failed to propagate tolerations, expected 1, got %d", len(podSpec.Spec.Tolerations))
 	}
@@ -309,7 +491,7 @@ func TestBuildRayCluster(t *testing.T) {
 }
 
 func TestBuilWorkerPodTemplate(t *testing.T) {
-	podSpec, err := buildWorkerPodTemplate("2.4", make(map[string]string), &workerGroup, &template)
+	podSpec, err := buildWorkerPodTemplate("2.4", &api.EnvironmentVariables{}, &workerGroup, &template)
 	assert.Nil(t, err)
 
 	if podSpec.Spec.ServiceAccountName != "account" {

@@ -6,8 +6,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/pointer"
 
-	rayv1alpha1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1alpha1"
+	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -117,17 +118,17 @@ func createSomePod() (pod *corev1.Pod) {
 
 func TestGetHeadGroupServiceAccountName(t *testing.T) {
 	tests := map[string]struct {
-		input *rayv1alpha1.RayCluster
+		input *rayv1.RayCluster
 		want  string
 	}{
 		"Ray cluster with head group service account": {
-			input: &rayv1alpha1.RayCluster{
+			input: &rayv1.RayCluster{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "raycluster-sample",
 					Namespace: "default",
 				},
-				Spec: rayv1alpha1.RayClusterSpec{
-					HeadGroupSpec: rayv1alpha1.HeadGroupSpec{
+				Spec: rayv1.RayClusterSpec{
+					HeadGroupSpec: rayv1.HeadGroupSpec{
 						Template: corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								ServiceAccountName: "my-service-account",
@@ -139,13 +140,13 @@ func TestGetHeadGroupServiceAccountName(t *testing.T) {
 			want: "my-service-account",
 		},
 		"Ray cluster without head group service account": {
-			input: &rayv1alpha1.RayCluster{
+			input: &rayv1.RayCluster{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "raycluster-sample",
 					Namespace: "default",
 				},
-				Spec: rayv1alpha1.RayClusterSpec{
-					HeadGroupSpec: rayv1alpha1.HeadGroupSpec{
+				Spec: rayv1.RayClusterSpec{
+					HeadGroupSpec: rayv1.HeadGroupSpec{
 						Template: corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{},
 						},
@@ -348,7 +349,7 @@ func TestCalculateAvailableReplicas(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "pod1",
 					Labels: map[string]string{
-						"ray.io/node-type": string(rayv1alpha1.HeadNode),
+						"ray.io/node-type": string(rayv1.HeadNode),
 					},
 				},
 				Status: corev1.PodStatus{
@@ -359,7 +360,7 @@ func TestCalculateAvailableReplicas(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "pod2",
 					Labels: map[string]string{
-						"ray.io/node-type": string(rayv1alpha1.WorkerNode),
+						"ray.io/node-type": string(rayv1.WorkerNode),
 					},
 				},
 				Status: corev1.PodStatus{
@@ -370,7 +371,7 @@ func TestCalculateAvailableReplicas(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "pod2",
 					Labels: map[string]string{
-						"ray.io/node-type": string(rayv1alpha1.WorkerNode),
+						"ray.io/node-type": string(rayv1.WorkerNode),
 					},
 				},
 				Status: corev1.PodStatus{
@@ -381,7 +382,7 @@ func TestCalculateAvailableReplicas(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "pod2",
 					Labels: map[string]string{
-						"ray.io/node-type": string(rayv1alpha1.WorkerNode),
+						"ray.io/node-type": string(rayv1.WorkerNode),
 					},
 				},
 				Status: corev1.PodStatus{
@@ -427,14 +428,14 @@ func TestGenerateHeadServiceName(t *testing.T) {
 
 	// [RayCluster]
 	// Test 1: `HeadService.Name` is empty.
-	headSvcName, err := GenerateHeadServiceName(RayClusterCRD, rayv1alpha1.RayClusterSpec{}, "raycluster-sample")
+	headSvcName, err := GenerateHeadServiceName(RayClusterCRD, rayv1.RayClusterSpec{}, "raycluster-sample")
 	expectedGeneratedSvcName := "raycluster-sample-head-svc"
 	assert.Nil(t, err)
 	assert.Equal(t, headSvcName, expectedGeneratedSvcName)
 
 	// Test 2: `HeadService.Name` is not empty.
-	clusterSpecWithHeadService := rayv1alpha1.RayClusterSpec{
-		HeadGroupSpec: rayv1alpha1.HeadGroupSpec{
+	clusterSpecWithHeadService := rayv1.RayClusterSpec{
+		HeadGroupSpec: rayv1.HeadGroupSpec{
 			HeadService: &corev1.Service{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "my-head-svc",
@@ -449,7 +450,7 @@ func TestGenerateHeadServiceName(t *testing.T) {
 
 	// [RayService]
 	// Test 3: `HeadService.Name` is empty.
-	headSvcName, err = GenerateHeadServiceName(RayServiceCRD, rayv1alpha1.RayClusterSpec{}, "rayservice-sample")
+	headSvcName, err = GenerateHeadServiceName(RayServiceCRD, rayv1.RayClusterSpec{}, "rayservice-sample")
 	expectedGeneratedSvcName = "rayservice-sample-head-svc"
 	assert.Nil(t, err)
 	assert.Equal(t, headSvcName, expectedGeneratedSvcName)
@@ -460,6 +461,104 @@ func TestGenerateHeadServiceName(t *testing.T) {
 	assert.Equal(t, headSvcName, expectedGeneratedSvcName)
 
 	// Invalid CRD type
-	_, err = GenerateHeadServiceName(RayJobCRD, rayv1alpha1.RayClusterSpec{}, "rayjob-sample")
+	_, err = GenerateHeadServiceName(RayJobCRD, rayv1.RayClusterSpec{}, "rayjob-sample")
 	assert.NotNil(t, err)
+}
+
+func TestGetWorkerGroupDesiredReplicas(t *testing.T) {
+	// Test 1: `WorkerGroupSpec.Replicas` is nil.
+	// `Replicas` is impossible to be nil in a real RayCluster CR as it has a default value assigned in the CRD.
+	minReplicas := int32(1)
+	maxReplicas := int32(5)
+
+	workerGroupSpec := rayv1.WorkerGroupSpec{
+		MinReplicas: &minReplicas,
+		MaxReplicas: &maxReplicas,
+	}
+	assert.Equal(t, GetWorkerGroupDesiredReplicas(workerGroupSpec), minReplicas)
+
+	// Test 2: `WorkerGroupSpec.Replicas` is not nil and is within the range.
+	replicas := int32(3)
+	workerGroupSpec.Replicas = &replicas
+	assert.Equal(t, GetWorkerGroupDesiredReplicas(workerGroupSpec), replicas)
+
+	// Test 3: `WorkerGroupSpec.Replicas` is not nil but is more than maxReplicas.
+	replicas = int32(6)
+	workerGroupSpec.Replicas = &replicas
+	assert.Equal(t, GetWorkerGroupDesiredReplicas(workerGroupSpec), maxReplicas)
+
+	// Test 4: `WorkerGroupSpec.Replicas` is not nil but is less than minReplicas.
+	replicas = int32(0)
+	workerGroupSpec.Replicas = &replicas
+	assert.Equal(t, GetWorkerGroupDesiredReplicas(workerGroupSpec), minReplicas)
+
+	// Test 5: `WorkerGroupSpec.Replicas` is nil and minReplicas is less than maxReplicas.
+	workerGroupSpec.Replicas = nil
+	workerGroupSpec.MinReplicas = &maxReplicas
+	workerGroupSpec.MaxReplicas = &minReplicas
+	assert.Equal(t, GetWorkerGroupDesiredReplicas(workerGroupSpec), *workerGroupSpec.MaxReplicas)
+}
+
+func TestCalculateDesiredReplicas(t *testing.T) {
+	tests := map[string]struct {
+		group1Replicas    *int32
+		group1MinReplicas *int32
+		group1MaxReplicas *int32
+		group2Replicas    *int32
+		group2MinReplicas *int32
+		group2MaxReplicas *int32
+		answer            int32
+	}{
+		"Both groups' Replicas are nil": {
+			group1Replicas:    nil,
+			group1MinReplicas: pointer.Int32Ptr(1),
+			group1MaxReplicas: pointer.Int32Ptr(5),
+			group2Replicas:    nil,
+			group2MinReplicas: pointer.Int32Ptr(2),
+			group2MaxReplicas: pointer.Int32Ptr(5),
+			answer:            3,
+		},
+		"Group1's Replicas is smaller than MinReplicas, and Group2's Replicas is more than MaxReplicas.": {
+			group1Replicas:    pointer.Int32Ptr(0),
+			group1MinReplicas: pointer.Int32Ptr(2),
+			group1MaxReplicas: pointer.Int32Ptr(5),
+			group2Replicas:    pointer.Int32Ptr(6),
+			group2MinReplicas: pointer.Int32Ptr(2),
+			group2MaxReplicas: pointer.Int32Ptr(5),
+			answer:            7,
+		},
+		"Group1's Replicas is more than MaxReplicas.": {
+			group1Replicas:    pointer.Int32Ptr(6),
+			group1MinReplicas: pointer.Int32Ptr(2),
+			group1MaxReplicas: pointer.Int32Ptr(5),
+			group2Replicas:    pointer.Int32Ptr(3),
+			group2MinReplicas: pointer.Int32Ptr(2),
+			group2MaxReplicas: pointer.Int32Ptr(5),
+			answer:            8,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			cluster := rayv1.RayCluster{
+				Spec: rayv1.RayClusterSpec{
+					WorkerGroupSpecs: []rayv1.WorkerGroupSpec{
+						{
+							GroupName:   "group1",
+							Replicas:    tc.group1Replicas,
+							MinReplicas: tc.group1MinReplicas,
+							MaxReplicas: tc.group1MaxReplicas,
+						},
+						{
+							GroupName:   "group2",
+							Replicas:    tc.group2Replicas,
+							MinReplicas: tc.group2MinReplicas,
+							MaxReplicas: tc.group2MaxReplicas,
+						},
+					},
+				},
+			}
+			assert.Equal(t, CalculateDesiredReplicas(&cluster), tc.answer)
+		})
+	}
 }

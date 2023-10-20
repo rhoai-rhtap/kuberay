@@ -5,7 +5,7 @@ COMMIT_SHA1     := $(shell git rev-parse HEAD )
 IMG ?= controller:latest
 # Produce CRDs that work back to Kubernetes 1.11 (no version conversion)
 # Golang forbids converting float from Json to struct. Need allowDangerousTypes=true to unblock build.
-CRD_OPTIONS ?= "crd:maxDescLen=100,trivialVersions=true,preserveUnknownFields=false,generateEmbeddedObjectMeta=true,allowDangerousTypes=true"
+CRD_OPTIONS ?= "crd:maxDescLen=0,trivialVersions=true,preserveUnknownFields=false,generateEmbeddedObjectMeta=true,allowDangerousTypes=true"
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -81,8 +81,11 @@ build: generate fmt vet ## Build manager binary.
     "                                           \
     -o bin/manager main.go
 
-run: manifests generate fmt vet ## Run a controller from your host.
-	go run ./main.go
+# run: manifests generate fmt vet
+# Running the controller from your host may fail to reconcile resources. For example, when creating a RayService
+# KubeRay sends HTTP requests to the Ray head using ${HEAD_SVC_FQDN}:52365 which is not reachable from outside of a K8s cluster.
+# For detail, see https://docs.ray.io/en/master/cluster/kubernetes/troubleshooting/rayservice-troubleshooting.html#issue-5-fail-to-create-update-serve-applications
+# 	go run ./main.go -enable-leader-election=false
 
 docker-image: ## Build image only
 	${ENGINE} build -t ${IMG} .
@@ -91,6 +94,9 @@ docker-build: test docker-image ## Build image with the manager.
 
 docker-push: ## Push image with the manager.
 	${ENGINE} push ${IMG}
+
+docker-multi-arch-image: # Build and push multi arch image, amd64 and arm64 currently
+	${ENGINE} buildx build --push --platform linux/amd64,linux/arm64/v8 -t ${IMG} .
 
 ##@ Deployment
 

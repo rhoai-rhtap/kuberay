@@ -1,9 +1,9 @@
 package model
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strconv"
 
 	klog "k8s.io/klog/v2"
@@ -11,7 +11,7 @@ import (
 	"github.com/golang/protobuf/ptypes/timestamp"
 	"github.com/ray-project/kuberay/apiserver/pkg/util"
 	api "github.com/ray-project/kuberay/proto/go_client"
-	"github.com/ray-project/kuberay/ray-operator/apis/ray/v1alpha1"
+	rayv1api "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 	v1 "k8s.io/api/core/v1"
 )
 
@@ -53,7 +53,6 @@ func getHeadNodeEnv() []string {
 		"RAY_PORT",
 		"RAY_ADDRESS",
 		"RAY_USAGE_STATS_KUBERAY_IN_USE",
-		"REDIS_PASSWORD",
 	}
 }
 
@@ -88,7 +87,7 @@ func contains(s []string, str string) bool {
 	return false
 }
 
-func FromCrdToApiClusters(clusters []*v1alpha1.RayCluster, clusterEventsMap map[string][]v1.Event) []*api.Cluster {
+func FromCrdToApiClusters(clusters []*rayv1api.RayCluster, clusterEventsMap map[string][]v1.Event) []*api.Cluster {
 	apiClusters := make([]*api.Cluster, 0)
 	for _, cluster := range clusters {
 		apiClusters = append(apiClusters, FromCrdToApiCluster(cluster, clusterEventsMap[cluster.Name]))
@@ -96,7 +95,7 @@ func FromCrdToApiClusters(clusters []*v1alpha1.RayCluster, clusterEventsMap map[
 	return apiClusters
 }
 
-func FromCrdToApiCluster(cluster *v1alpha1.RayCluster, events []v1.Event) *api.Cluster {
+func FromCrdToApiCluster(cluster *rayv1api.RayCluster, events []v1.Event) *api.Cluster {
 	pbCluster := &api.Cluster{
 		Name:         cluster.Name,
 		Namespace:    cluster.Namespace,
@@ -137,14 +136,14 @@ func FromCrdToApiCluster(cluster *v1alpha1.RayCluster, events []v1.Event) *api.C
 	return pbCluster
 }
 
-func PopulateRayClusterSpec(spec v1alpha1.RayClusterSpec) *api.ClusterSpec {
+func PopulateRayClusterSpec(spec rayv1api.RayClusterSpec) *api.ClusterSpec {
 	clusterSpec := &api.ClusterSpec{}
 	clusterSpec.HeadGroupSpec = PopulateHeadNodeSpec(spec.HeadGroupSpec)
 	clusterSpec.WorkerGroupSpec = PopulateWorkerNodeSpec(spec.WorkerGroupSpecs)
 	return clusterSpec
 }
 
-func PopulateHeadNodeSpec(spec v1alpha1.HeadGroupSpec) *api.HeadGroupSpec {
+func PopulateHeadNodeSpec(spec rayv1api.HeadGroupSpec) *api.HeadGroupSpec {
 	headNodeSpec := &api.HeadGroupSpec{
 		RayStartParams:  spec.RayStartParams,
 		ServiceType:     string(spec.ServiceType),
@@ -173,13 +172,7 @@ func PopulateHeadNodeSpec(spec v1alpha1.HeadGroupSpec) *api.HeadGroupSpec {
 
 	// Here we update environment only for a container named 'ray-head'
 	if container, _, ok := util.GetContainerByName(spec.Template.Spec.Containers, "ray-head"); ok && len(container.Env) > 0 {
-		env := make(map[string]string)
-		for _, kv := range container.Env {
-			if !contains(getHeadNodeEnv(), kv.Name) {
-				env[kv.Name] = kv.Value
-			}
-		}
-		headNodeSpec.Environment = env
+		headNodeSpec.Environment = convert_env_variables(container.Env, true)
 	}
 
 	if len(spec.Template.Spec.ServiceAccountName) > 1 {
@@ -193,7 +186,7 @@ func PopulateHeadNodeSpec(spec v1alpha1.HeadGroupSpec) *api.HeadGroupSpec {
 	return headNodeSpec
 }
 
-func PopulateWorkerNodeSpec(specs []v1alpha1.WorkerGroupSpec) []*api.WorkerGroupSpec {
+func PopulateWorkerNodeSpec(specs []rayv1api.WorkerGroupSpec) []*api.WorkerGroupSpec {
 	var workerNodeSpecs []*api.WorkerGroupSpec
 
 	for _, spec := range specs {
@@ -224,13 +217,7 @@ func PopulateWorkerNodeSpec(specs []v1alpha1.WorkerGroupSpec) []*api.WorkerGroup
 
 		// Here we update environment only for a container named 'ray-worker'
 		if container, _, ok := util.GetContainerByName(spec.Template.Spec.Containers, "ray-worker"); ok && len(container.Env) > 0 {
-			env := make(map[string]string)
-			for _, kv := range container.Env {
-				if !contains(getWorkNodeEnv(), kv.Name) {
-					env[kv.Name] = kv.Value
-				}
-			}
-			workerNodeSpec.Environment = env
+			workerNodeSpec.Environment = convert_env_variables(container.Env, false)
 		}
 
 		if len(spec.Template.Spec.ServiceAccountName) > 1 {
@@ -245,6 +232,67 @@ func PopulateWorkerNodeSpec(specs []v1alpha1.WorkerGroupSpec) []*api.WorkerGroup
 	}
 
 	return workerNodeSpecs
+}
+
+func convert_env_variables(cenv []v1.EnvVar, header bool) *api.EnvironmentVariables {
+	env := api.EnvironmentVariables{
+		Values:     make(map[string]string),
+		ValuesFrom: make(map[string]*api.EnvValueFrom),
+	}
+	for _, kv := range cenv {
+		if header {
+			if contains(getHeadNodeEnv(), kv.Name) {
+				continue
+			}
+		} else {
+			if contains(getWorkNodeEnv(), kv.Name) {
+				// Skip reserved names
+				continue
+			}
+		}
+		if kv.ValueFrom != nil {
+			// this is value from
+			if kv.ValueFrom.ConfigMapKeyRef != nil {
+				// This is config map
+				env.ValuesFrom[kv.Name] = &api.EnvValueFrom{
+					Source: api.EnvValueFrom_CONFIGMAP,
+					Name:   kv.ValueFrom.ConfigMapKeyRef.Name,
+					Key:    kv.ValueFrom.ConfigMapKeyRef.Key,
+				}
+				continue
+			}
+			if kv.ValueFrom.SecretKeyRef != nil {
+				// This is Secret
+				env.ValuesFrom[kv.Name] = &api.EnvValueFrom{
+					Source: api.EnvValueFrom_SECRET,
+					Name:   kv.ValueFrom.SecretKeyRef.Name,
+					Key:    kv.ValueFrom.SecretKeyRef.Key,
+				}
+				continue
+			}
+			if kv.ValueFrom.ResourceFieldRef != nil {
+				// This resource ref
+				env.ValuesFrom[kv.Name] = &api.EnvValueFrom{
+					Source: api.EnvValueFrom_RESOURCEFIELD,
+					Name:   kv.ValueFrom.ResourceFieldRef.ContainerName,
+					Key:    kv.ValueFrom.ResourceFieldRef.Resource,
+				}
+				continue
+			}
+			if kv.ValueFrom.FieldRef != nil {
+				// This resource ref
+				env.ValuesFrom[kv.Name] = &api.EnvValueFrom{
+					Source: api.EnvValueFrom_FIELD,
+					Key:    kv.ValueFrom.FieldRef.FieldPath,
+				}
+				continue
+			}
+		} else {
+			// This is value
+			env.Values[kv.Name] = kv.Value
+		}
+	}
+	return &env
 }
 
 func FromKubeToAPIComputeTemplate(configMap *v1.ConfigMap) *api.ComputeTemplate {
@@ -278,7 +326,7 @@ func FromKubeToAPIComputeTemplates(configMaps []*v1.ConfigMap) []*api.ComputeTem
 	return apiComputeTemplates
 }
 
-func FromCrdToApiJobs(jobs []*v1alpha1.RayJob) []*api.RayJob {
+func FromCrdToApiJobs(jobs []*rayv1api.RayJob) []*api.RayJob {
 	apiJobs := make([]*api.RayJob, 0)
 	for _, job := range jobs {
 		apiJobs = append(apiJobs, FromCrdToApiJob(job))
@@ -286,7 +334,7 @@ func FromCrdToApiJobs(jobs []*v1alpha1.RayJob) []*api.RayJob {
 	return apiJobs
 }
 
-func FromCrdToApiJob(job *v1alpha1.RayJob) (pbJob *api.RayJob) {
+func FromCrdToApiJob(job *rayv1api.RayJob) (pbJob *api.RayJob) {
 	defer func() {
 		err := recover()
 		if err != nil {
@@ -300,14 +348,18 @@ func FromCrdToApiJob(job *v1alpha1.RayJob) (pbJob *api.RayJob) {
 		User:                     job.Labels[util.RayClusterUserLabelKey],
 		Entrypoint:               job.Spec.Entrypoint,
 		Metadata:                 job.Spec.Metadata,
-		RuntimeEnv:               job.Spec.RuntimeEnv,
+		RuntimeEnv:               job.Spec.RuntimeEnvYAML,
 		JobId:                    job.Status.JobId,
 		ShutdownAfterJobFinishes: job.Spec.ShutdownAfterJobFinishes,
-		ClusterSelector:          job.Spec.ClusterSelector,
 		CreatedAt:                &timestamp.Timestamp{Seconds: job.CreationTimestamp.Unix()},
 		JobStatus:                string(job.Status.JobStatus),
 		JobDeploymentStatus:      string(job.Status.JobDeploymentStatus),
 		Message:                  job.Status.Message,
+	}
+
+	// Add optional params
+	if job.Spec.ClusterSelector != nil {
+		pbJob.ClusterSelector = job.Spec.ClusterSelector
 	}
 
 	if job.Spec.RayClusterSpec != nil {
@@ -322,10 +374,31 @@ func FromCrdToApiJob(job *v1alpha1.RayJob) (pbJob *api.RayJob) {
 		pbJob.DeleteAt = &timestamp.Timestamp{Seconds: job.DeletionTimestamp.Unix()}
 	}
 
+	if job.Spec.SubmitterPodTemplate != nil {
+		pbJob.JobSubmitter = &api.RayJobSubmitter{
+			Image: job.Spec.SubmitterPodTemplate.Spec.Containers[0].Image,
+		}
+		if cpu := job.Spec.SubmitterPodTemplate.Spec.Containers[0].Resources.Limits.Cpu().String(); cpu != "1" {
+			pbJob.JobSubmitter.Cpu = cpu
+		}
+		if mem := job.Spec.SubmitterPodTemplate.Spec.Containers[0].Resources.Limits.Memory().String(); mem != "1Gi" {
+			pbJob.JobSubmitter.Memory = mem
+		}
+	}
+	if jcpus := job.Spec.EntrypointNumCpus; jcpus > 0 {
+		pbJob.EntrypointNumCpus = jcpus
+	}
+	if jgpus := job.Spec.EntrypointNumGpus; jgpus > 0 {
+		pbJob.EntrypointNumGpus = jgpus
+	}
+	if jres := job.Spec.EntrypointResources; jres != "" {
+		pbJob.EntrypointResources = jres
+	}
+
 	return pbJob
 }
 
-func FromCrdToApiServices(services []*v1alpha1.RayService, serviceEventsMap map[string][]v1.Event) []*api.RayService {
+func FromCrdToApiServices(services []*rayv1api.RayService, serviceEventsMap map[string][]v1.Event) []*api.RayService {
 	apiServices := make([]*api.RayService, 0)
 	for _, service := range services {
 		apiServices = append(apiServices, FromCrdToApiService(service, serviceEventsMap[service.Name]))
@@ -333,7 +406,7 @@ func FromCrdToApiServices(services []*v1alpha1.RayService, serviceEventsMap map[
 	return apiServices
 }
 
-func FromCrdToApiService(service *v1alpha1.RayService, events []v1.Event) *api.RayService {
+func FromCrdToApiService(service *rayv1api.RayService, events []v1.Event) *api.RayService {
 	defer func() {
 		err := recover()
 		if err != nil {
@@ -346,53 +419,84 @@ func FromCrdToApiService(service *v1alpha1.RayService, events []v1.Event) *api.R
 		deleteTime = service.DeletionTimestamp.Unix()
 	}
 	pbService := &api.RayService{
-		Name:                     service.Name,
-		Namespace:                service.Namespace,
-		User:                     service.Labels[util.RayClusterUserLabelKey],
-		ServeDeploymentGraphSpec: PopulateServeDeploymentGraphSpec(service.Spec.ServeDeploymentGraphSpec),
-		ClusterSpec:              PopulateRayClusterSpec(service.Spec.RayClusterSpec),
-		RayServiceStatus:         PoplulateRayServiceStatus(service.Name, service.Status, events),
-		CreatedAt:                &timestamp.Timestamp{Seconds: service.CreationTimestamp.Unix()},
-		DeleteAt:                 &timestamp.Timestamp{Seconds: deleteTime},
+		Name:                               service.Name,
+		Namespace:                          service.Namespace,
+		User:                               service.Labels[util.RayClusterUserLabelKey],
+		ServeDeploymentGraphSpec:           PopulateServeDeploymentGraphSpec(service.Spec.ServeDeploymentGraphSpec),
+		ServeConfig_V2:                     service.Spec.ServeConfigV2,
+		ClusterSpec:                        PopulateRayClusterSpec(service.Spec.RayClusterSpec),
+		ServiceUnhealthySecondThreshold:    PoplulateUnhealthySecondThreshold(service.Spec.ServiceUnhealthySecondThreshold),
+		DeploymentUnhealthySecondThreshold: PoplulateUnhealthySecondThreshold(service.Spec.DeploymentUnhealthySecondThreshold),
+		RayServiceStatus:                   PoplulateRayServiceStatus(service.Name, service.Status, events),
+		CreatedAt:                          &timestamp.Timestamp{Seconds: service.CreationTimestamp.Unix()},
+		DeleteAt:                           &timestamp.Timestamp{Seconds: deleteTime},
 	}
 	return pbService
 }
 
-func PopulateServeDeploymentGraphSpec(spec v1alpha1.ServeDeploymentGraphSpec) *api.ServeDeploymentGraphSpec {
-	runtimeEnv, _ := base64.StdEncoding.DecodeString(spec.RuntimeEnv)
+func PopulateServeDeploymentGraphSpec(spec rayv1api.ServeDeploymentGraphSpec) *api.ServeDeploymentGraphSpec {
+	if reflect.DeepEqual(spec, rayv1api.ServeDeploymentGraphSpec{}) {
+		return nil
+	}
 	return &api.ServeDeploymentGraphSpec{
 		ImportPath:   spec.ImportPath,
-		RuntimeEnv:   string(runtimeEnv),
+		RuntimeEnv:   spec.RuntimeEnv,
 		ServeConfigs: PopulateServeConfig(spec.ServeConfigSpecs),
 	}
 }
 
-func PopulateServeConfig(serveConfigSpecs []v1alpha1.ServeConfigSpec) []*api.ServeConfig {
+func PopulateServeConfig(serveConfigSpecs []rayv1api.ServeConfigSpec) []*api.ServeConfig {
 	serveConfigs := make([]*api.ServeConfig, 0)
 	for _, serveConfigSpec := range serveConfigSpecs {
-		serveConfig := &api.ServeConfig{
-			DeploymentName:       serveConfigSpec.Name,
-			Replicas:             *serveConfigSpec.NumReplicas,
-			RoutePrefix:          serveConfigSpec.RoutePrefix,
-			MaxConcurrentQueries: *serveConfigSpec.MaxConcurrentQueries,
-			UserConfig:           serveConfigSpec.UserConfig,
-			AutoscalingConfig:    serveConfigSpec.AutoscalingConfig,
-			ActorOptions: &api.ActorOptions{
-				RuntimeEnv:                serveConfigSpec.RayActorOptions.RuntimeEnv,
-				CpusPerActor:              *serveConfigSpec.RayActorOptions.NumCpus,
-				GpusPerActor:              *serveConfigSpec.RayActorOptions.NumGpus,
-				MemoryPerActor:            *serveConfigSpec.RayActorOptions.Memory,
-				ObjectStoreMemoryPerActor: *serveConfigSpec.RayActorOptions.ObjectStoreMemory,
-				CustomResource:            serveConfigSpec.RayActorOptions.Resources,
-				AccceleratorType:          serveConfigSpec.RayActorOptions.AcceleratorType,
-			},
+		var actorOptions *api.ActorOptions
+		if reflect.DeepEqual(serveConfigSpec.RayActorOptions, rayv1api.RayActorOptionSpec{}) {
+			actorOptions = nil
+		} else {
+			actorOptions = &api.ActorOptions{
+				RuntimeEnv:       serveConfigSpec.RayActorOptions.RuntimeEnv,
+				CustomResource:   serveConfigSpec.RayActorOptions.Resources,
+				AccceleratorType: serveConfigSpec.RayActorOptions.AcceleratorType,
+			}
+			if ncpus := serveConfigSpec.RayActorOptions.NumCpus; ncpus != nil {
+				actorOptions.CpusPerActor = *ncpus
+			}
+			if ngpus := serveConfigSpec.RayActorOptions.NumGpus; ngpus != nil {
+				actorOptions.GpusPerActor = *ngpus
+			}
+			if mem := serveConfigSpec.RayActorOptions.Memory; mem != nil {
+				actorOptions.MemoryPerActor = *mem
+			}
+			if omem := serveConfigSpec.RayActorOptions.ObjectStoreMemory; omem != nil {
+				actorOptions.ObjectStoreMemoryPerActor = *omem
+			}
 		}
+		serveConfig := &api.ServeConfig{
+			DeploymentName:    serveConfigSpec.Name,
+			AutoscalingConfig: serveConfigSpec.AutoscalingConfig,
+			UserConfig:        serveConfigSpec.UserConfig,
+			RoutePrefix:       serveConfigSpec.RoutePrefix,
+			ActorOptions:      actorOptions,
+		}
+		if serveConfigSpec.NumReplicas != nil {
+			serveConfig.Replicas = *serveConfigSpec.NumReplicas
+		}
+		if serveConfigSpec.MaxConcurrentQueries != nil {
+			serveConfig.MaxConcurrentQueries = *serveConfigSpec.MaxConcurrentQueries
+		}
+
 		serveConfigs = append(serveConfigs, serveConfig)
 	}
 	return serveConfigs
 }
 
-func PoplulateRayServiceStatus(serviceName string, serviceStatus v1alpha1.RayServiceStatuses, events []v1.Event) *api.RayServiceStatus {
+func PoplulateUnhealthySecondThreshold(value *int32) int32 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func PoplulateRayServiceStatus(serviceName string, serviceStatus rayv1api.RayServiceStatuses, events []v1.Event) *api.RayServiceStatus {
 	status := &api.RayServiceStatus{
 		RayServiceEvents:       PopulateRayServiceEvent(serviceName, events),
 		RayClusterName:         serviceStatus.ActiveServiceStatus.RayClusterName,
@@ -406,7 +510,7 @@ func PoplulateRayServiceStatus(serviceName string, serviceStatus v1alpha1.RaySer
 	return status
 }
 
-func PopulateServeApplicationStatus(serveApplicationStatuses map[string]v1alpha1.AppStatus) []*api.ServeApplicationStatus {
+func PopulateServeApplicationStatus(serveApplicationStatuses map[string]rayv1api.AppStatus) []*api.ServeApplicationStatus {
 	appStatuses := make([]*api.ServeApplicationStatus, 0)
 	for appName, appStatus := range serveApplicationStatuses {
 		ds := &api.ServeApplicationStatus{
@@ -420,7 +524,7 @@ func PopulateServeApplicationStatus(serveApplicationStatuses map[string]v1alpha1
 	return appStatuses
 }
 
-func PopulateServeDeploymentStatus(serveDeploymentStatuses map[string]v1alpha1.ServeDeploymentStatus) []*api.ServeDeploymentStatus {
+func PopulateServeDeploymentStatus(serveDeploymentStatuses map[string]rayv1api.ServeDeploymentStatus) []*api.ServeDeploymentStatus {
 	deploymentStatuses := make([]*api.ServeDeploymentStatus, 0)
 	for deploymentName, deploymentStatus := range serveDeploymentStatuses {
 		ds := &api.ServeDeploymentStatus{

@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 
 	"github.com/go-logr/logr"
 
-	rayv1alpha1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1alpha1"
+	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 )
 
 type FakeRayDashboardClient struct {
@@ -15,6 +16,8 @@ type FakeRayDashboardClient struct {
 	singleAppStatus  ServeApplicationStatus
 	multiAppStatuses map[string]*ServeApplicationStatus
 	serveDetails     ServeDetails
+
+	GetJobInfoMock atomic.Pointer[func(context.Context, string) (*RayJobInfo, error)]
 }
 
 var _ RayDashboardClientInterface = (*FakeRayDashboardClient)(nil)
@@ -53,11 +56,14 @@ func (r *FakeRayDashboardClient) SetMultiApplicationStatuses(statuses map[string
 	r.multiAppStatuses = statuses
 }
 
-func (r *FakeRayDashboardClient) GetJobInfo(_ context.Context, jobId string) (*RayJobInfo, error) {
+func (r *FakeRayDashboardClient) GetJobInfo(ctx context.Context, jobId string) (*RayJobInfo, error) {
+	if mock := r.GetJobInfoMock.Load(); mock != nil {
+		return (*mock)(ctx, jobId)
+	}
 	return nil, nil
 }
 
-func (r *FakeRayDashboardClient) SubmitJob(_ context.Context, rayJob *rayv1alpha1.RayJob, log *logr.Logger) (jobId string, err error) {
+func (r *FakeRayDashboardClient) SubmitJob(_ context.Context, rayJob *rayv1.RayJob, log *logr.Logger) (jobId string, err error) {
 	return "", nil
 }
 
