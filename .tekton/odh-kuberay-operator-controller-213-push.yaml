@@ -22,7 +22,7 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/redhat-user-workloads/rhoai-tenant/rhoai-v2-13/odh-kuberay-operator-controller-213:{{revision}}
+    value: quay.io/rhoai/odh-kuberay-operator-controller:{{revision}}
   - name: dockerfile
     value: ./ray-operator/Dockerfile
   - name: path-context
