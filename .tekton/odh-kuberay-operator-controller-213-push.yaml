@@ -11,7 +11,7 @@ metadata:
   creationTimestamp: null
   labels:
     appstudio.openshift.io/application: rhoai-v2-13
-    appstudio.openshift.io/component: odh-kuberay-operator-controller-213
+    appstudio.openshift.io/component: odh-kuberay-operator-controller-v-2-13
     pipelines.appstudio.openshift.io/type: build
   name: odh-kuberay-operator-controller-213-on-push
   namespace: rhoai-tenant
