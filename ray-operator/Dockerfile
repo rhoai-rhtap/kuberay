@@ -18,7 +18,7 @@ COPY controllers/ controllers/
 USER root
 RUN CGO_ENABLED=0 GOOS=linux GO111MODULE=on go build -a -o manager main.go
 
-FROM registry.access.redhat.com/ubi9/ubi-minimal:9.3
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.4
 WORKDIR /
 COPY --from=builder /workspace/manager .
 USER 65532:65532
