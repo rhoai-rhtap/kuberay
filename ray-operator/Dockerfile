@@ -10,11 +10,11 @@ FROM registry.redhat.io/ubi8/ubi:latest AS builder
 ARG GOLANG_VERSION=1.22.2
 
 # Install system dependencies
-#RUN dnf upgrade -y && dnf install -y \
-  #  gcc \
-  #  make \
-  #  openssl-devel \
-   # && dnf clean all && rm -rf /var/cache/yum
+RUN dnf upgrade -y && dnf install -y \
+    gcc \
+    make \
+    openssl-devel \
+    && dnf clean all && rm -rf /var/cache/yum
 
 # Install Go
 ENV PATH=/usr/local/go/bin:$PATH
