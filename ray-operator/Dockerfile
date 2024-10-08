@@ -25,14 +25,17 @@ COPY --from=golang /usr/lib/golang /usr/local/go
 
 WORKDIR /workspace
 USER root
-# Copy the Go Modules manifests
-COPY ${SOURCE_CODE}/ray-operator/go.mod go.mod
-COPY ${SOURCE_CODE}/ray-operator/go.sum go.sum
+
+COPY go.mod go.mod
+COPY go.sum go.sum
+# cache deps before building and copying source so that we don't need to re-download as much
+# and so that source changes don't invalidate our downloaded layer
+RUN go mod download
 
 # Copy the go source
-COPY ${SOURCE_CODE}/ray-operator/main.go main.go
-COPY ${SOURCE_CODE}/ray-operator/apis/ apis/
-COPY ${SOURCE_CODE}/ray-operator/controllers/ controllers/
+COPY main.go main.go
+COPY apis/ apis/
+COPY controllers/ controllers/
 
 # Build
 USER root
