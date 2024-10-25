@@ -395,17 +395,17 @@ spec:
         - name: kind
           value: task
         resolver: bundles
-     steps:
-      - name: snyk-auth-step
-        image: quay.io/konflux-ci/tekton-catalog/task-sast-snyk-check:0.2@sha256:82c42d27c9c59db6cf6c235e89f7b37f5cdfc75d0d361ca0ee91ae703ba72301
-        script: |
-          snyk auth $SNYK_TOKEN
-        env:
-          - name: SNYK_TOKEN
-            valueFrom:
-              secretKeyRef:
-                name: snyk-secret
-                key: SNYK_TOKEN
+      steps:
+        - name: snyk-auth-step
+          image: quay.io/konflux-ci/tekton-catalog/task-sast-snyk-check:0.2@sha256:82c42d27c9c59db6cf6c235e89f7b37f5cdfc75d0d361ca0ee91ae703ba72301
+          script: |
+            snyk auth $SNYK_TOKEN
+          env:
+            - name: SNYK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: snyk-secret
+                  key: SNYK_TOKEN
       when:
       - input: $(params.skip-checks)
         operator: in
