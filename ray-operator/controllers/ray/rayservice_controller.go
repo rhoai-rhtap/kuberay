@@ -15,7 +15,7 @@ import (
 
 	"github.com/ray-project/kuberay/ray-operator/controllers/ray/common"
 
-	cmap "github.com/orcaman/concurrent-map"
+	cmap "github.com/orcaman/concurrent-map/v2"
 
 	"github.com/go-logr/logr"
 	fmtErrors "github.com/pkg/errors"
