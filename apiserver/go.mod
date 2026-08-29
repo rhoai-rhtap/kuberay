@@ -1,6 +1,6 @@
 module github.com/ray-project/kuberay/apiserver
 
-go 1.20
+go 1.25.0
 
 require (
 	github.com/go-openapi/runtime v0.19.31
@@ -34,8 +34,8 @@ require (
 	github.com/emicklei/go-restful/v3 v3.11.0 // indirect
 	github.com/go-logr/logr v1.2.4 // indirect
 	github.com/go-openapi/errors v0.19.6 // indirect
-	github.com/go-openapi/jsonpointer v0.19.6 // indirect
-	github.com/go-openapi/jsonreference v0.20.2 // indirect
+	github.com/go-openapi/jsonpointer v1.0.0 // indirect
+	github.com/go-openapi/jsonreference v1.0.1 // indirect
 	github.com/go-openapi/strfmt v0.19.5 // indirect
 	github.com/go-openapi/swag v0.22.3 // indirect
 	github.com/go-stack/stack v1.8.0 // indirect
