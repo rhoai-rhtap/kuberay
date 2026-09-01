@@ -7,7 +7,7 @@ require (
 	github.com/kris-nova/logger v0.2.2
 	github.com/kris-nova/lolgopher v0.0.0-20210112022122-73f0047e8b65
 	github.com/olekukonko/tablewriter v0.0.5
-	github.com/ray-project/kuberay/proto v0.0.0-20220119062608-4054f1bf1765
+	github.com/ray-project/kuberay/proto v0.0.0-20250520224740-196f789ec7b2
 	github.com/spf13/cobra v1.3.0
 	github.com/spf13/viper v1.10.1
 	google.golang.org/grpc v1.59.0
