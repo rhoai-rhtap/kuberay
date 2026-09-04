@@ -27,7 +27,7 @@ require (
 	k8s.io/utils v0.0.0-20230406110748-d93618cff8a2
 	sigs.k8s.io/controller-runtime v0.16.3
 	sigs.k8s.io/yaml v1.3.0
-	volcano.sh/apis v1.6.0-alpha.0.0.20221012070524-685db38b4fae
+	volcano.sh/apis v1.15.2
 )
 
 replace go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.35.1 => go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.44.0
