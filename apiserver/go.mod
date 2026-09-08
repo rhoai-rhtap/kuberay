@@ -1,9 +1,14 @@
 module github.com/ray-project/kuberay/apiserver
 
-go 1.20
+go 1.27
 
 require (
+	github.com/elazarl/go-bindata-assetfs v1.0.1
 	github.com/go-openapi/runtime v0.19.31
+	github.com/golang/protobuf v1.5.3
+	github.com/grpc-ecosystem/go-grpc-middleware v1.3.0
+	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0
+	github.com/grpc-ecosystem/grpc-gateway/v2 v2.11.3
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.16.0
 	github.com/ray-project/kuberay/proto v0.0.0-20220703232803-3e7749d17400
@@ -15,14 +20,6 @@ require (
 	k8s.io/apimachinery v0.28.4
 	k8s.io/client-go v0.28.4
 	k8s.io/klog/v2 v2.100.1
-)
-
-require (
-	github.com/elazarl/go-bindata-assetfs v1.0.1
-	github.com/golang/protobuf v1.5.3
-	github.com/grpc-ecosystem/go-grpc-middleware v1.3.0
-	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0
-	github.com/grpc-ecosystem/grpc-gateway/v2 v2.11.3
 	sigs.k8s.io/controller-runtime v0.16.3
 )
 
