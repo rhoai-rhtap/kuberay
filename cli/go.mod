@@ -16,7 +16,7 @@ require (
 
 require (
 	github.com/fsnotify/fsnotify v1.5.1 // indirect
-	github.com/go-logr/logr v1.0.0 // indirect
+	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.11.3 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
