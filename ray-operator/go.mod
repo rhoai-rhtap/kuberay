@@ -4,7 +4,7 @@ go 1.20
 
 require (
 	github.com/Masterminds/semver/v3 v3.2.0
-	github.com/go-logr/logr v1.2.4
+	github.com/go-logr/logr v1.4.4
 	github.com/go-logr/zapr v1.2.4
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/jarcoal/httpmock v1.2.0
